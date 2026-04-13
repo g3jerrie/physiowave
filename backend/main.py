@@ -5,25 +5,46 @@ All AI inference runs via Ollama on localhost.
 """
 
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.core.config import settings
 from backend.core.database import init_db
 from backend.core.logger import logger
 from backend.routers import health, advisor, patients, sessions, rag
 
 
+import asyncio
+
+is_shutting_down = False
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup/shutdown lifecycle."""
-    # Startup
-    logger.info("PhysioWave starting up...")
-    await init_db()
-    logger.info("Database initialized")
-    yield
-    # Shutdown
-    logger.info("PhysioWave shutting down...")
+    global is_shutting_down
+    from backend.rag.worker import worker_instance
+    try:
+        # Startup
+        logger.info("PhysioWave starting up...")
+        await init_db()
+        logger.info("Database initialized")
+        os.makedirs(settings.upload_dir, exist_ok=True)
+        os.makedirs("./backend/data/extracted_images", exist_ok=True)
+        logger.info(f"Uploads directory verified at {settings.upload_dir}")
+        
+        # Start RAG Worker Queue
+        worker_instance._task = asyncio.create_task(worker_instance.start())
+        yield
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        is_shutting_down = True
+        logger.info("PhysioWave received shutdown signal...")
+    finally:
+        # Shutdown
+        is_shutting_down = True
+        await worker_instance.stop()
+        logger.info("PhysioWave shutting down completely.")
 
 
 app = FastAPI(

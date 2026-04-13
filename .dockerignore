@@ -1,0 +1,38 @@
+# Git
+.git
+.gitignore
+
+# Python
+**/__pycache__/
+**/.venv/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache/
+
+# Node.js
+**/node_modules/
+**/dist/
+**/.next/
+**/out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+
+# Databases/Data
+**/data/chromadb/
+**/*.db
+backend/data/
+backend/assets/*.pdf
+
+# Docker
+Dockerfile*
+docker-compose.yml
+
+# IDEs
+.vscode/
+.idea/

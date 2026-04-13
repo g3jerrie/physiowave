@@ -9,15 +9,12 @@ Also handles semantic search for the retrieval pass.
 """
 
 import uuid
+import typing
 
 from backend.core.config import settings
 from backend.core.logger import logger
 from backend.rag.embeddings import embed_document, embed_query, embed_texts
-from backend.rag.pdf_parser import (
-    DocumentChunk,
-    extract_and_chunk,
-    get_all_pdf_paths,
-)
+from backend.rag.pdf_parser import extract_and_chunk
 from backend.rag.vector_store import add_documents, get_document_count, search
 
 
@@ -26,26 +23,181 @@ from backend.rag.vector_store import add_documents, get_document_count, search
 def ingest_document(
     file_path: str,
     document_type: str,
-    on_progress: callable | None = None,
+    job_id: int | None = None,
+    check_cancelled: typing.Callable[[], bool] | None = None,
+    extract_images: bool = True,
+    safe_mode: bool = False,
 ) -> int:
     """Ingest a single PDF: parse → embed → store.
 
+    Supports crash recovery and real-time DB progress updates.
     Returns the number of chunks ingested.
     """
-    # Step 1: Parse
-    chunks = extract_and_chunk(file_path, document_type=document_type)
+    import sqlite3
+    db_path = settings.database_url.replace("sqlite:///", "")
+
+    def update_progress(ingested_count: int, total_count: int | None = None):
+        if not job_id: return
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            if total_count is not None:
+                cur.execute("UPDATE ingestion_status SET total_chunks = ?, ingested_chunks = ? WHERE id = ?", (total_count, ingested_count, job_id))
+            else:
+                cur.execute("UPDATE ingestion_status SET ingested_chunks = ? WHERE id = ?", (ingested_count, job_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def update_status(status: str):
+        if not job_id: return
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE ingestion_status SET status = ? WHERE id = ?", (status, job_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+    # Step 1: Parse (with crash-resumable chunk cache)
+    import os
+    import json
+    from backend.rag.pdf_parser import DocumentChunk
+    
+    cache_dir = os.path.join(settings.upload_dir, ".chunk_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"job_{job_id}.json") if job_id else None
+    
+    # Check for existing parse cache from a previous interrupted run
+    cached_chunks: list[DocumentChunk] = []
+    resume_page = 0
+    
+    if cache_path and os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r") as f:
+                cache_data = json.load(f)
+            resume_page = cache_data.get("last_page", 0)
+            cached_chunks = [
+                DocumentChunk(**c) for c in cache_data.get("chunks", [])
+            ]
+            logger.info(f"Loaded parse cache: {len(cached_chunks)} chunks from {resume_page} pages")
+        except Exception as e:
+            logger.warning(f"Failed to load parse cache, starting fresh: {e}")
+            cached_chunks = []
+            resume_page = 0
+
+    update_status("parsing")
+    
+    # Get total page count early for UI visibility during parsing
+    try:
+        import fitz
+        doc_meta = fitz.open(file_path)
+        total_pages = len(doc_meta)
+        doc_meta.close()
+        update_progress(resume_page, total_pages)
+    except Exception:
+        total_pages = 0
+
+    def on_parsing_progress(current: int, total: int):
+        update_progress(current, total)
+
+    def on_page_complete(last_page: int, chunks_so_far: list):
+        """Save chunks to disk cache so parsing can resume after a crash."""
+        if not cache_path:
+            return
+        try:
+            cache_data = {
+                "last_page": last_page,
+                "chunks": [
+                    {
+                        "text": c.text,
+                        "source_file": c.source_file,
+                        "page_number": c.page_number,
+                        "chunk_index": c.chunk_index,
+                        "document_type": c.document_type,
+                    }
+                    for c in chunks_so_far
+                ],
+            }
+            with open(cache_path, "w") as f:
+                json.dump(cache_data, f)
+        except Exception as e:
+            logger.warning(f"Failed to save parse cache: {e}")
+
+    chunks = extract_and_chunk(
+        file_path, 
+        document_type=document_type, 
+        extract_images=extract_images,
+        on_progress=on_parsing_progress,
+        check_cancelled=check_cancelled,
+        start_page=resume_page,
+        existing_chunks=cached_chunks,
+        on_page_complete=on_page_complete,
+    )
     if not chunks:
-        logger.warning(f"No text extracted from {file_path}")
+        update_progress(0, 0)
+        if not extract_images:
+            raise ValueError("0 chunks extracted. If this is a scanned document, please enable the Extract Images toggle.")
+        else:
+            raise ValueError("No text or recognizable content could be extracted from this PDF.")
+
+    # Check if cancelled during parsing before proceeding to embedding
+    if check_cancelled and check_cancelled():
+        logger.warning(f"Cancelled after parsing. Not proceeding to embedding.")
         return 0
 
     total = len(chunks)
     logger.info(f"Embedding {total} chunks from {file_path}")
+    
+    # Parsing is complete — delete the chunk cache (no longer needed)
+    if cache_path and os.path.exists(cache_path):
+        try:
+            os.remove(cache_path)
+            logger.info("Parse cache deleted (parsing complete).")
+        except Exception:
+            pass
+    
+    # Step 2: Transition to Processing (Embedding)
+    update_status("processing")
+
+    # ── Smart Resume Logic ─────────────────────────────────────────
+    # During parsing, `total_chunks` held the page count (e.g., 345).
+    # During embedding, `total_chunks` holds the chunk count (e.g., 500).
+    # If the stored total_chunks MATCHES our current chunk count, a previous
+    # run made it to the embedding phase — we can safely resume from
+    # `ingested_chunks`. Otherwise, start fresh.
+    ingested = 0
+    if job_id:
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT ingested_chunks, total_chunks FROM ingestion_status WHERE id = ?", (job_id,))
+            row = cur.fetchone()
+            stored_ingested = row[0] if row and row[0] else 0
+            stored_total = row[1] if row and row[1] else 0
+        finally:
+            conn.close()
+        
+        if stored_total == total and stored_ingested > 0:
+            ingested = stored_ingested
+            logger.info(f"Crash recovery: Resuming embedding from chunk {ingested}/{total}")
+        else:
+            logger.info(f"Fresh embedding start (stored_total={stored_total}, actual_total={total})")
+
+    update_progress(ingested, total)
 
     # Step 2 & 3: Embed and store in batches
-    batch_size = 20
-    ingested = 0
+    batch_size = 1 if safe_mode else 5  # Safe mode reduces VRAM spikes
+    
+    if safe_mode:
+        logger.info(f"Safe Mode active for Job {job_id}: Processing with batch_size=1")
 
-    for i in range(0, total, batch_size):
+    for i in range(ingested, total, batch_size):
+        if check_cancelled and check_cancelled():
+            logger.warning(f"Ingestion cancelled for {file_path}. Aborting thread.")
+            return ingested
+
         batch = chunks[i : i + batch_size]
 
         # Generate embeddings for the batch
@@ -72,52 +224,11 @@ def ingest_document(
         )
 
         ingested += len(batch)
-        if on_progress:
-            on_progress(ingested, total)
+        update_progress(ingested)
 
     logger.info(f"Ingested {ingested} chunks from {file_path}")
     return ingested
 
-
-def ingest_all_documents(
-    on_progress: callable | None = None,
-) -> dict:
-    """Ingest all PDF assets.
-
-    Returns summary: {total_chunks, documents_processed, errors}.
-    """
-    assets = get_all_pdf_paths()
-    total_chunks = 0
-    errors: list[str] = []
-
-    for i, asset in enumerate(assets):
-        if on_progress:
-            on_progress(i, len(assets), asset["display_name"])
-
-        try:
-            count = ingest_document(
-                file_path=asset["path"],
-                document_type=asset["document_type"],
-            )
-            total_chunks += count
-        except Exception as e:
-            error_msg = f"Failed to ingest {asset['display_name']}: {e}"
-            logger.error(error_msg)
-            errors.append(error_msg)
-
-    if on_progress:
-        on_progress(len(assets), len(assets), None)
-
-    logger.info(
-        f"Ingestion complete: {total_chunks} chunks from "
-        f"{len(assets)} documents ({len(errors)} errors)"
-    )
-
-    return {
-        "total_chunks": total_chunks,
-        "documents_processed": len(assets),
-        "errors": errors,
-    }
 
 
 # ─── Search ───────────────────────────────────────────────────────────

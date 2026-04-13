@@ -28,11 +28,12 @@ services:
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - LLM_MODEL=gemma3:4b
+      - VISION_MODEL=moondream
       - EMBEDDING_MODEL=nomic-embed-text
-      - DATABASE_URL=sqlite:///./data/physiowave.db
-      - CHROMADB_PATH=./data/chromadb
+      - DATABASE_URL=sqlite:///./backend/data/physiowave.db
+      - CHROMADB_PATH=./backend/data/chromadb
     volumes:
-      - ./data:/app/data
+      - ./backend/data:/app/backend/data
       - ./backend/assets:/app/assets
     depends_on:
       - ollama

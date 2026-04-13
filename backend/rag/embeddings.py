@@ -20,7 +20,10 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         return []
 
     try:
-        response = ollama.embed(
+        # Pass timeout to prevent GPU OOM or CPU fallback errors from failing too fast
+        # Note: Ollama python client sets timeout via Client(timeout) or passing options
+        client = ollama.Client(host=settings.ollama_base_url, timeout=300.0)
+        response = client.embed(
             model=settings.embedding_model,
             input=texts,
         )
@@ -44,3 +47,22 @@ def embed_document(text: str) -> list[float]:
     if not embeddings:
         raise ValueError("No embedding returned for document")
     return embeddings[0]
+
+def extract_image_description(base64_image: str) -> str:
+    """Generate a textual description for an extracted image using Vision model."""
+    try:
+        client = ollama.Client(host=settings.ollama_base_url, timeout=300.0)
+        response = client.chat(
+            model=settings.vision_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "You are a clinical AI assistant. Describe this medical or equipment diagram in high detail, focusing on textual data, components, relationships, and actionable knowledge. Do not start with 'This is an image of', just describe the contents directly.",
+                    "images": [base64_image]
+                }
+            ]
+        )
+        return response['message']['content'].strip()
+    except Exception as e:
+        logger.error(f"Vision model failed to describe image: {e}")
+        return ""

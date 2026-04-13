@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # ─── Ollama (Local AI Server) ──────────────────────────────────────
     ollama_base_url: str = "http://localhost:11434"
     llm_model: str = "gemma3:4b"
+    vision_model: str = "moondream"
     embedding_model: str = "nomic-embed-text"
 
     # ─── LLM Inference ─────────────────────────────────────────────────
@@ -27,8 +28,8 @@ class Settings(BaseSettings):
     search_threshold: float = 0.6  # Min similarity score (0.0-1.0)
 
     # ─── Database ──────────────────────────────────────────────────────
-    database_url: str = "sqlite:///./data/physiowave.db"
-    chromadb_path: str = "./data/chromadb"
+    database_url: str = "sqlite:///./backend/data/physiowave.db"
+    chromadb_path: str = "./backend/data/chromadb"
 
     # ─── Security ──────────────────────────────────────────────────────
     # HIPAA Compliance Note: encryption_key protects PII at rest.
@@ -42,7 +43,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # ─── Assets ────────────────────────────────────────────────────────
-    assets_dir: str = "./assets/equipment_manuals"
+    assets_dir: str = "./backend/assets"
+    upload_dir: str = "./backend/data/uploads"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

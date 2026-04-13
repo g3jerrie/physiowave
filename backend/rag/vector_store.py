@@ -10,15 +10,17 @@ from chromadb.config import Settings as ChromaSettings
 from backend.core.config import settings
 from backend.core.logger import logger
 
+import typing
+
 # ─── ChromaDB Client ─────────────────────────────────────────────────
 
-_client: chromadb.PersistentClient | None = None
-_collection: chromadb.Collection | None = None
+_client: typing.Any = None
+_collection: typing.Any = None
 
 COLLECTION_NAME = "physiowave_clinical"
 
 
-def get_client() -> chromadb.PersistentClient:
+def get_client() -> typing.Any:
     """Get or create the ChromaDB persistent client."""
     global _client
     if _client is None:
@@ -30,7 +32,7 @@ def get_client() -> chromadb.PersistentClient:
     return _client
 
 
-def get_collection() -> chromadb.Collection:
+def get_collection() -> typing.Any:
     """Get or create the clinical documents collection."""
     global _collection
     if _collection is None:

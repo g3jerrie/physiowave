@@ -6,6 +6,7 @@ async function fetchAPI<T>(
 ): Promise<T> {
   const res = await fetch(`${API_BASE}${endpoint}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
+    cache: "no-store",
     ...options,
   });
 
@@ -235,8 +236,74 @@ export async function searchKnowledgeBase(
   });
 }
 
-export async function triggerIngestion(): Promise<{ status: string }> {
-  return fetchAPI<{ status: string }>("/rag/ingest", { method: "POST" });
+export interface UploadStatus {
+  id: number;
+  filename: string;
+  total_chunks: number;
+  ingested_chunks: number;
+  extract_images: number;
+  safe_mode: number;
+  status: "pending" | "parsing" | "processing" | "complete" | "failed" | "cancelled";
+  error_message?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export async function uploadDocument(file: File, documentType: string = "clinical_guide", extractImages: boolean = true): Promise<{ status: string, ingestion_id: number, message: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("document_type", documentType);
+  formData.append("extract_images", extractImages.toString());
+
+  const res = await fetch(`${API_BASE}/rag/upload`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(error.detail || `API Error: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getUploads(): Promise<UploadStatus[]> {
+  return fetchAPI<UploadStatus[]>("/rag/uploads");
+}
+
+export async function deleteUpload(id: number, purgeVectors: boolean = false): Promise<{status: string}> {
+  return fetchAPI<{status: string}>(`/rag/uploads/${id}?purge_vectors=${purgeVectors}`, { method: "DELETE" });
+}
+
+export async function retryUpload(
+  id: number, 
+  extractImages?: boolean, 
+  safeMode?: boolean
+): Promise<{status: string, ingestion_id: number}> {
+  const query = new URLSearchParams();
+  if (extractImages !== undefined) query.append("extract_images", extractImages.toString());
+  if (safeMode !== undefined) query.append("safe_mode", safeMode.toString());
+  const queryString = query.toString() ? `?${query.toString()}` : "";
+  
+  return fetchAPI<{status: string, ingestion_id: number}>(`/rag/uploads/${id}/retry${queryString}`, { method: "POST" });
+}
+
+export interface SystemConfig {
+  llm_model: string;
+  vision_model: string;
+  embedding_model: string;
+}
+
+export async function getConfig(): Promise<SystemConfig> {
+  return fetchAPI<SystemConfig>("/config");
+}
+
+export async function updateConfig(data: {llm_model: string, vision_model: string}): Promise<{status: string}> {
+  return fetchAPI<{status: string}>("/config", {
+    method: "POST",
+    body: JSON.stringify(data)
+  });
 }
 
 export async function getRagStatus(): Promise<{

@@ -11,7 +11,9 @@ import aiosqlite
 import os
 from pathlib import Path
 
-DATABASE_PATH = "./data/physiowave.db"
+from backend.core.config import settings
+
+DATABASE_PATH = settings.database_url.replace("sqlite:///", "")
 
 # ─── Schema ────────────────────────────────────────────────────────────
 
@@ -81,7 +83,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TABLE IF NOT EXISTS ingestion_status (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT NOT NULL,
-    chunks_count INTEGER NOT NULL DEFAULT 0,
+    total_chunks INTEGER NOT NULL DEFAULT 0,
+    ingested_chunks INTEGER NOT NULL DEFAULT 0,
+    extract_images INTEGER NOT NULL DEFAULT 1, -- Boolean flag
+    safe_mode INTEGER NOT NULL DEFAULT 0,      -- Boolean flag: if 1, uses batch_size=1
     status TEXT NOT NULL DEFAULT 'pending',  -- pending, processing, complete, failed
     error_message TEXT,
     created_at TEXT NOT NULL,

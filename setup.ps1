@@ -9,7 +9,12 @@
 Write-Host "`n=== PhysioWave Local Setup ===" -ForegroundColor Cyan
 
 # ─── Step 1: Check prerequisites ─────────────────────────────────────
-Write-Host "`n[1/6] Checking prerequisites..." -ForegroundColor Yellow
+Write-Host "`n[1/6] Checking prerequisites and cleaning up..." -ForegroundColor Yellow
+
+if (Test-Path "data") {
+    Write-Host "  Removing redundant root 'data' directory..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force "data"
+}
 
 $python = Get-Command python -ErrorAction SilentlyContinue
 $node = Get-Command node -ErrorAction SilentlyContinue
@@ -28,9 +33,11 @@ Write-Host "  This is a one-time download (~3.5GB total)"
 
 if ($ollama) {
     ollama pull gemma3:4b
+    ollama pull moondream
     ollama pull nomic-embed-text
     Write-Host "  Models downloaded successfully!" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  Skipped (Ollama not installed)" -ForegroundColor Yellow
 }
 
@@ -38,9 +45,42 @@ if ($ollama) {
 Write-Host "`n[3/6] Setting up backend..." -ForegroundColor Yellow
 
 Push-Location backend
-if (-not (Test-Path ".venv")) {
+
+# Check if .venv exists and if the Python interpreter within it is functional
+$venvPath = ".venv"
+$venvPython = "$venvPath\Scripts\python.exe"
+$recreateVenv = $false
+
+if (Test-Path $venvPath) {
+    if (-not (Test-Path $venvPython)) {
+        Write-Host "  Virtual environment found but python.exe is missing. Recreating..." -ForegroundColor Yellow
+        $recreateVenv = $true
+    }
+    else {
+        # Try running the venv python to see if it's broken (e.g. after a system Python upgrade)
+        try {
+            & $venvPython --version | Out-Null
+            if ($LASTEXITCODE -ne 0) { $recreateVenv = $true }
+        }
+        catch {
+            $recreateVenv = $true
+        }
+        
+        if ($recreateVenv) {
+            Write-Host "  Virtual environment is broken (likely due to Python upgrade). Recreating..." -ForegroundColor Yellow
+        }
+    }
+}
+else {
+    $recreateVenv = $true
+}
+
+if ($recreateVenv) {
+    if (Test-Path $venvPath) { Remove-Item -Recurse -Force $venvPath }
     python -m venv .venv
 }
+
+Write-Host "  Installing dependencies..."
 .\.venv\Scripts\pip install -r requirements.txt
 
 if (-not (Test-Path ".env")) {
@@ -61,12 +101,13 @@ Write-Host "  Frontend ready!" -ForegroundColor Green
 # ─── Step 5: Copy PDF Assets ─────────────────────────────────────────
 Write-Host "`n[5/6] Checking PDF assets..." -ForegroundColor Yellow
 
-$assetsDir = "backend\assets\equipment_manuals"
+$assetsDir = "backend\assets"
 if (-not (Test-Path $assetsDir)) {
     New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
     Write-Host "  Created assets directory: $assetsDir" -ForegroundColor Yellow
     Write-Host "  Copy your PDF files to this directory." -ForegroundColor Yellow
-} else {
+}
+else {
     $pdfCount = (Get-ChildItem "$assetsDir\*.pdf" -ErrorAction SilentlyContinue).Count
     Write-Host "  Found $pdfCount PDF assets" -ForegroundColor Green
 }
@@ -77,7 +118,7 @@ Write-Host ""
 Write-Host "To start PhysioWave, open 3 terminals:" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Terminal 1 (Ollama):   ollama serve" -ForegroundColor White
-Write-Host "  Terminal 2 (Backend):  cd backend; .\.venv\Scripts\activate; uvicorn backend.main:app --reload" -ForegroundColor White
+Write-Host "  Terminal 2 (Backend):  Set-Item -Path Env:PYTHONPATH -Value '.'; .\backend\.venv\Scripts\activate; uvicorn backend.main:app --reload" -ForegroundColor White
 Write-Host "  Terminal 3 (Frontend): cd frontend; npm run dev" -ForegroundColor White
 Write-Host ""
 Write-Host "Then open: http://localhost:3000" -ForegroundColor Green
