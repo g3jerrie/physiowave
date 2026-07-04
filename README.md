@@ -9,6 +9,11 @@ PhysioWave is a HIPAA-compliant, local-first clinical assistant platform designe
 *   **AI Local Engine**: Ollama running **Gemma 3** (local inference), **Llava** (multimodal vision), and **ChromaDB** for Retrieval-Augmented Generation (RAG).
 *   **PDF Processing**: Open-source, local PDF extraction and indexing for internal medical guides.
 
+For detailed architecture diagrams, database schemas, and future roadmap specifications, see the references below:
+*   📚 **[Technical Architecture & Development Spec](file:///c:/Users/geral/Documents/GitHub/physiowave/architecture/technical_architecture_and_roadmap.md)**: Deep dive into the RAG design, safety gates, database tables, and engineering enhancement plans.
+*   🎯 **[Technical Interview Study Guide](file:///c:/Users/geral/Documents/GitHub/physiowave/architecture/interview_prep_cheatsheet.md)**: Curated Q&As, implementation explanations, and presentation scripts for interviews.
+
+
 ## Prerequisites
 
 *   Python 3.14+
