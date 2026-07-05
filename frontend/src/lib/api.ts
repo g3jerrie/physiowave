@@ -143,11 +143,20 @@ export async function getSuggestion(
   });
 }
 
+export interface StreamMetadata {
+  source_chunks: Record<string, unknown>[];
+  is_safe: boolean;
+  blocked_protocols: string[];
+  warning_message?: string;
+  query: string;
+}
+
 export function streamSuggestion(
   intake: IntakeForm,
   onToken: (token: string) => void,
   onDone: () => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  onMetadata?: (meta: StreamMetadata) => void
 ): AbortController {
   const controller = new AbortController();
 
@@ -176,9 +185,17 @@ export function streamSuggestion(
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.token) onToken(data.token);
-              if (data.done) onDone();
-              if (data.error) onError(data.error);
+              if (data.__metadata__ && data.payload && onMetadata) {
+                // Final metadata event — parse the nested JSON payload
+                const meta: StreamMetadata = JSON.parse(data.payload);
+                onMetadata(meta);
+              } else if (data.token) {
+                onToken(data.token);
+              } else if (data.done) {
+                onDone();
+              } else if (data.error) {
+                onError(data.error);
+              }
             } catch {
               // skip malformed JSON
             }
@@ -193,6 +210,7 @@ export function streamSuggestion(
 
   return controller;
 }
+
 
 // ─── Safety ───────────────────────────────────────────────────────────
 

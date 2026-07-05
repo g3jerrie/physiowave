@@ -66,7 +66,7 @@ async def suggest_treatment_stream(intake: IntakeForm):
     """
     def event_stream():
         try:
-            for token in generate_suggestion_stream(
+            for chunk in generate_suggestion_stream(
                 age=intake.age,
                 gender=intake.gender,
                 diagnosis=intake.diagnosis,
@@ -77,11 +77,17 @@ async def suggest_treatment_stream(intake: IntakeForm):
                 risk_factors=set(intake.risk_factors),
                 additional_notes=intake.additional_notes,
             ):
-                yield f"data: {json.dumps({'token': token})}\n\n"
+                # Detect the metadata sentinel emitted after all tokens
+                if isinstance(chunk, str) and chunk.startswith("\x00METADATA:"):
+                    raw_json = chunk[len("\x00METADATA:"):]
+                    yield f"data: {json.dumps({'__metadata__': True, 'payload': raw_json})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'token': chunk})}\n\n"
 
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
 
     return StreamingResponse(
         event_stream(),
@@ -99,25 +105,52 @@ async def check_safety(request: SafetyCheckRequest):
     factors = set(request.risk_factors)
     blocked = get_blocked_protocols(factors)
 
+    # ── is_safe is determined by whether ANY protocols are blocked ────
+    # NOTE: Do NOT use safety_interceptor.validate() here because it
+    # scans suggestion TEXT for keywords. When suggestion is empty
+    # (e.g. Safety Checker page), it always returns is_safe=True even
+    # if the patient's risk factors block multiple therapy protocols.
+    is_safe = len(blocked) == 0
+
     conflicts = []
+    warning_message: str | None = None
+
     if request.suggested_protocol:
+        # Detailed conflict analysis against a specific proposed protocol
         details = get_conflict_details(request.suggested_protocol, factors)
         for factor, protocols in details.items():
             conflicts.append({
                 "risk_factor": factor,
                 "blocked_protocols": list(protocols),
             })
-
-    is_safe = not blocked if not request.suggested_protocol else len(conflicts) == 0
-
-    result = safety_interceptor.validate(
-        suggestion=request.suggested_protocol or "",
-        risk_factors=factors,
-    )
+        result = safety_interceptor.validate(
+            suggestion=request.suggested_protocol,
+            risk_factors=factors,
+        )
+        warning_message = result.warning_message
+    elif not is_safe:
+        # No suggestion text — build warning directly from blocked protocols
+        lines = [
+            "⚠️ HIGH-RISK WARNING: Contraindications Detected",
+            "",
+            "Based on the selected risk factors, the following therapy "
+            "protocols are automatically blocked for this patient:",
+            "",
+        ]
+        for protocol in sorted(blocked):
+            readable = protocol.replace("_", " ").upper()
+            lines.append(f"  • {readable}")
+        lines.extend([
+            "",
+            "These protocols MUST NOT be applied. "
+            "Consult the patient's full medical history before proceeding.",
+        ])
+        warning_message = "\n".join(lines)
 
     return SafetyCheckResponse(
-        is_safe=result.is_safe,
+        is_safe=is_safe,
         blocked_protocols=list(blocked),
         conflicts=conflicts,
-        warning_message=result.warning_message,
+        warning_message=warning_message,
     )
+

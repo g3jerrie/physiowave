@@ -144,8 +144,28 @@ def generate_suggestion_stream(
         additional_notes=f"\nAdditional Notes: {additional_notes}" if additional_notes else "",
     )
 
-    # Pass 3: Stream tokens
-    yield from chat_stream(prompt)
+    # Pass 3: Stream tokens, collect full text for safety validation
+    full_text_parts: list[str] = []
+    for token in chat_stream(prompt):
+        full_text_parts.append(token)
+        yield token
+
+    # ─── Safety Gate (post-stream) ───────────────────────────────────
+    full_text = "".join(full_text_parts)
+    safety = safety_interceptor.validate(full_text, factors)
+
+    # Yield a final metadata event — consumed by the frontend to render
+    # the Citations Accordion and any Redline Warning.
+    import json as _json
+    metadata = {
+        "__metadata__": True,
+        "source_chunks": results,
+        "is_safe": safety.is_safe,
+        "blocked_protocols": [c.protocol for c in safety.conflicts],
+        "warning_message": safety.warning_message,
+        "query": search_query,
+    }
+    yield f"\x00METADATA:{_json.dumps(metadata)}"
 
 
 def _build_search_query(

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { streamSuggestion, type IntakeForm } from "@/lib/api";
+import { streamSuggestion, type IntakeForm, type StreamMetadata } from "@/lib/api";
 
 const RISK_FACTORS = [
   "metal_implants",
@@ -29,6 +29,8 @@ export default function AdvisorPage() {
   const [step, setStep] = useState<"intake" | "generating" | "result">("intake");
   const [suggestion, setSuggestion] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [metadata, setMetadata] = useState<StreamMetadata | null>(null);
+  const [citationsOpen, setCitationsOpen] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
 
   // Form state
@@ -58,6 +60,8 @@ export default function AdvisorPage() {
 
     setStep("generating");
     setSuggestion("");
+    setMetadata(null);
+    setCitationsOpen(false);
     setIsStreaming(true);
 
     controllerRef.current = streamSuggestion(
@@ -71,7 +75,8 @@ export default function AdvisorPage() {
         setIsStreaming(false);
         setSuggestion(`Error: ${error}`);
         setStep("result");
-      }
+      },
+      (meta) => setMetadata(meta)
     );
   };
 
@@ -79,6 +84,8 @@ export default function AdvisorPage() {
     controllerRef.current?.abort();
     setStep("intake");
     setSuggestion("");
+    setMetadata(null);
+    setCitationsOpen(false);
     setIsStreaming(false);
   };
 
@@ -258,7 +265,41 @@ export default function AdvisorPage() {
       {/* Generating / Result */}
       {(step === "generating" || step === "result") && (
         <div className="space-y-4">
-          {/* Streaming output */}
+
+          {/* ── Redline Warning (Safety Gate triggered) ─────────────────── */}
+          {metadata && !metadata.is_safe && (
+            <div className="safety-warning relative rounded-2xl p-6 animate-slide-in">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-3xl">🚨</span>
+                <div>
+                  <h3 className="font-bold text-danger text-lg">
+                    ⛔ REDLINE — Safety Gate Triggered
+                  </h3>
+                  <p className="text-sm text-text-secondary mt-1">
+                    The AI suggestion contained protocols contraindicated for this patient.
+                    The following therapies have been blocked:
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {metadata.blocked_protocols.map((protocol) => (
+                  <span
+                    key={protocol}
+                    className="px-3 py-1.5 rounded-lg bg-danger/20 text-danger text-xs font-bold tracking-wide"
+                  >
+                    🚫 {protocol.replace(/_/g, " ").toUpperCase()}
+                  </span>
+                ))}
+              </div>
+              {metadata.warning_message && (
+                <pre className="text-xs text-text-secondary whitespace-pre-wrap font-mono bg-surface/50 rounded-xl p-4 border border-danger/20">
+                  {metadata.warning_message}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {/* ── AI Suggestion (streaming output) ─────────────────────────── */}
           <div className="glass-card rounded-2xl p-6">
             <div className="flex items-center gap-2 mb-4">
               {isStreaming && (
@@ -267,6 +308,11 @@ export default function AdvisorPage() {
               <h2 className="text-sm font-semibold text-text-secondary">
                 {isStreaming ? "Generating suggestion..." : "AI Suggestion"}
               </h2>
+              {metadata?.is_safe && (
+                <span className="ml-auto px-2 py-0.5 rounded-full bg-success/15 text-success text-xs font-semibold">
+                  ✅ Safety Gate: PASSED
+                </span>
+              )}
             </div>
 
             <div className="prose prose-sm max-w-none text-text-primary whitespace-pre-wrap leading-relaxed">
@@ -282,6 +328,60 @@ export default function AdvisorPage() {
               )}
             </div>
           </div>
+
+          {/* ── Citations Accordion ───────────────────────────────────────── */}
+          {metadata && metadata.source_chunks.length > 0 && (
+            <div className="glass-card rounded-2xl overflow-hidden">
+              <button
+                onClick={() => setCitationsOpen((o) => !o)}
+                className="w-full flex items-center justify-between px-6 py-4 text-sm font-semibold text-text-secondary hover:bg-surface-variant/50 transition-colors"
+              >
+                <span>
+                  📚 Clinical Sources ({metadata.source_chunks.length} chunks retrieved)
+                </span>
+                <span
+                  className={`transition-transform duration-200 ${citationsOpen ? "rotate-180" : ""}`}
+                >
+                  ▾
+                </span>
+              </button>
+
+              {citationsOpen && (
+                <div className="border-t border-border divide-y divide-border">
+                  {metadata.source_chunks.map((chunk, idx) => {
+                    const c = chunk as Record<string, unknown>;
+                    return (
+                      <div key={idx} className="px-6 py-4 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                            Source {idx + 1}
+                          </span>
+                          {Boolean(c.source_file) && (
+                            <span className="text-xs text-text-secondary font-mono">
+                              📄 {String(c.source_file)}
+                            </span>
+                          )}
+                          {c.page_number != null && (
+                            <span className="text-xs text-text-secondary">
+                              — Page {String(c.page_number)}
+                            </span>
+                          )}
+                          {c.score != null && (
+                            <span className="ml-auto text-xs text-text-secondary">
+                              Score: {(Number(c.score) * 100).toFixed(1)}%
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-text-secondary leading-relaxed line-clamp-4">
+                          {String(c.content ?? "")}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex gap-3">
