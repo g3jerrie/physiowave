@@ -265,3 +265,23 @@ We can build a local **Reinforcement Learning from Clinician Feedback (RLCF)** p
 > *"We designed a parallel, offline learning feedback loop based on patient treatment outcomes. When a therapy session results in a successful patient prognosis—which we measure quantitatively via a delta drop of 3 or more points on the Visual Analog Pain Scale—we vectorize that case and add it to an **Outcomes Vector Index**. This allows the RAG system to dynamically inject successful past patient cases directly into the LLM's context as few-shot exemplars. In parallel, the system exports these high-prognosis cases (completely stripped of PII) to an on-device training queue. A low-priority background process uses QLoRA to fine-tune a local model adapter on these clinical successes, allowing the model to naturally adapt to the clinic's specific practice patterns and patients over time."*
 
 ---
+
+## 🔍 Q11: What framework did you use to build the RAG pipeline, and why didn't you use LangChain?
+
+### **Core Answer**
+We built a **custom orchestration pipeline in pure Python** rather than using a high-level framework like LangChain or LlamaIndex. 
+
+We directly integrated the low-level SDKs for **ChromaDB** (for vector storage) and **Ollama** (for local model inference), and built our own custom logic for query routing, prompt construction, and safety checks.
+
+### **Why We Chose a Custom Pipeline over LangChain**
+1. **Need for Deterministic Control & Safety:** LangChain abstracts away the exact prompts being sent and the control flow. In a healthcare context where patient safety is paramount, we could not afford a "black box" abstraction. We needed absolute, line-by-line control over our `SafetyInterceptor` and prompt structures to guarantee clinical compliance.
+2. **Avoiding Bloat and Latency:** LangChain is a heavy dependency that introduces a lot of overhead. Because we are running entirely locally on constrained hardware (local GPUs in a clinic), we needed our pipeline to be as lightweight and performant as possible. 
+3. **Ease of Debugging:** When hallucinations or errors occur, debugging a custom Python script is much faster and more transparent than navigating through deep layers of LangChain's chains, agents, and custom classes. 
+4. **Dependency Stability:** LangChain has historically had a rapidly changing API with frequent breaking changes. In a medical device/software environment, we require high stability and minimal external dependency risk.
+
+### **How to Present This in an Interview**
+> *"For the orchestration of our RAG pipeline, we intentionally chose **not** to use frameworks like LangChain, and instead built a **custom pipeline in pure Python** utilizing the direct SDKs for ChromaDB and Ollama.* 
+> 
+> *The primary reason was **deterministic safety**. LangChain abstracts away prompt construction and execution, which creates a 'black box'. In a clinical application, we need absolute, transparent control over what data is fed into the LLM and exactly how the output is handled by our post-generation Safety Interceptor. Furthermore, because we deploy locally on constrained hardware, avoiding the bloat and overhead of a large framework allowed us to keep the application highly performant, easier to debug, and insulated from the frequent breaking changes common in rapidly evolving libraries."*
+
+---
